@@ -1,0 +1,111 @@
+import json
+import random
+import datetime
+import requests
+from pydub import AudioSegment
+from pydub.playback import play
+from geopy.geocoders import Nominatim
+
+class MaiAudioPlayer:
+    def __init__(self, mai_file, weather_api_key, air_quality_api_key):
+        self.mai_file = mai_file
+        self.weather_api_key = weather_api_key
+        self.air_quality_api_key = air_quality_api_key
+        self.tracks = self.load_mai_file()
+        self.geolocator = Nominatim(user_agent="mai_audio_player")
+    
+    def load_mai_file(self):
+        """Carica il file .mai e restituisce le tracce con le relative condizioni."""
+        with open(self.mai_file, 'r') as f:
+            data = json.load(f)
+        return data["tracks"]
+    
+    def get_weather(self, latitude, longitude):
+        """Recupera le condizioni meteo attuali basate sulle coordinate dell'utente."""
+        url = f"https://api.openweathermap.org/data/2.5/weather?lat={latitude}&lon={longitude}&appid={self.weather_api_key}&units=metric"
+        response = requests.get(url)
+        if response.status_code == 200:
+            weather_data = response.json()
+            return {
+                "weather": weather_data.get("weather")[0]["main"].lower(),
+                "temperature": weather_data.get("main")["temp"],
+                "pressure": weather_data.get("main")["pressure"]
+            }
+        return None
+    
+    def get_air_quality(self, latitude, longitude):
+        """Recupera la qualità dell'aria basata sulle coordinate dell'utente."""
+        url = f"https://api.openweathermap.org/data/2.5/air_pollution?lat={latitude}&lon={longitude}&appid={self.air_quality_api_key}"
+        response = requests.get(url)
+        if response.status_code == 200:
+            air_data = response.json()
+            return air_data["list"][0]["main"]["aqi"]  # Indice di qualità dell'aria
+        return None
+    
+    def select_track(self, user_profile):
+        """Seleziona la traccia in base al profilo utente."""
+        for track in self.tracks:
+            if self.match_conditions(track["conditions"], user_profile):
+                return track["file"]
+        return None
+    
+    def match_conditions(self, conditions, user_profile):
+        """Verifica se il profilo dell'utente soddisfa le condizioni della traccia."""
+        for key, value in conditions.items():
+            if key == "time":
+                current_hour = datetime.datetime.now().hour
+                if not (value[0] <= current_hour <= value[1]):
+                    return False
+            elif key == "weather":
+                weather_info = self.get_weather(user_profile["latitude"], user_profile["longitude"])
+                if weather_info and weather_info["weather"] != value.lower():
+                    return False
+            elif key == "temperature":
+                weather_info = self.get_weather(user_profile["latitude"], user_profile["longitude"])
+                if weather_info and not (value[0] <= weather_info["temperature"] <= value[1]):
+                    return False
+            elif key == "pressure":
+                weather_info = self.get_weather(user_profile["latitude"], user_profile["longitude"])
+                if weather_info and not (value[0] <= weather_info["pressure"] <= value[1]):
+                    return False
+            elif key == "air_quality":
+                air_quality = self.get_air_quality(user_profile["latitude"], user_profile["longitude"])
+                if air_quality and air_quality > value:
+                    return False
+            elif key == "light_level":
+                if "light_level" in user_profile and not (value[0] <= user_profile["light_level"] <= value[1]):
+                    return False
+            elif key == "respiratory_rate":
+                if "respiratory_rate" in user_profile and not (value[0] <= user_profile["respiratory_rate"] <= value[1]):
+                    return False
+            elif key in user_profile and user_profile[key] != value:
+                return False
+        return True
+    
+    def play_track(self, user_profile):
+        """Riproduce la traccia adatta al profilo dell'utente."""
+        track_file = self.select_track(user_profile)
+        if track_file:
+            audio = AudioSegment.from_file(track_file)
+            play(audio)
+        else:
+            print("Nessuna traccia adatta trovata.")
+
+# Esempio di file .mai (JSON format)
+example_mai = {
+    "tracks": [
+        {"file": "track1.mp3", "conditions": {"weather": "clear", "temperature": [15, 25], "pressure": [1000, 1020], "air_quality": 2, "light_level": [100, 500]}},
+        {"file": "track2.mp3", "conditions": {"weather": "rain", "temperature": [10, 20], "pressure": [990, 1010], "air_quality": 3, "respiratory_rate": [12, 18]}}
+    ]
+}
+
+# Salvataggio del file JSON di esempio
+with open("example.mai", "w") as f:
+    json.dump(example_mai, f)
+
+# Esempio di utilizzo
+weather_api_key = "YOUR_OPENWEATHERMAP_API_KEY"
+air_quality_api_key = "YOUR_AIR_QUALITY_API_KEY"
+player = MaiAudioPlayer("example.mai", weather_api_key, air_quality_api_key)
+user_profile = {"latitude": 48.8566, "longitude": 2.3522, "air_quality": 2, "temperature": 18, "pressure": 1015, "light_level": 300, "respiratory_rate": 16}  # Profilo simulato (Parigi)
+player.play_track(user_profile)
